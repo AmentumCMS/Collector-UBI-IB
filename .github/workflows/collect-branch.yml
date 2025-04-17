@@ -121,7 +121,7 @@ jobs:
           path: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle*
           if-no-files-found: error
 
-      - name: TARchive Repo1 code base for ${{ vars.COLLECTOR }}
+      - name: TARchive code base for ${{ vars.COLLECTOR }}
         run: |
           tar -cvC .. \
             -f ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz $(basename ${{ github.WORKSPACE }}) \
