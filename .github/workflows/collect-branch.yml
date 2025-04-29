@@ -63,7 +63,7 @@ jobs:
         run: |
           sha256sum -b ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz | tee \
             ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz.sha
- 
+
       - name: List files 
         run: ls -Alht ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz*
 
