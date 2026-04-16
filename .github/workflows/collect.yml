@@ -134,7 +134,7 @@ jobs:
 
   Release:
     runs-on: ubuntu-24.04
-    needs: [Date, MakeISO]
+    needs: [Date, Code, Skopeo]
     permissions:
       contents: write
       pull-requests: read
