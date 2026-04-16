@@ -1,0 +1,91 @@
+name: Reusable - Make ISO
+
+on:
+  workflow_call:
+    inputs:
+      date:
+        required: true
+        type: string
+
+jobs:
+  make-iso:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Install mkisofs
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mkisofs isomd5sum wget
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: ${{ vars.COLLECTOR }}
+
+      # Download Binaries if needed
+      # Binaries Downloaded
+
+      - name: Copy README to ${{ vars.COLLECTOR }} ISO
+        run: cp -v README.md ${{ vars.COLLECTOR }}/
+
+      - name: Show Artifacts
+        run: ls -1sh ${{ vars.COLLECTOR }}
+
+      - name: Generate Artifact Hash File
+        run: |
+          cd ${{ vars.COLLECTOR }}
+          sha256sum -b *.* | tee \
+            ${{ vars.COLLECTOR }}-${{ inputs.date }}.sha
+
+      - name: Upload Artifact Hash File
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ inputs.date }}.sha
+          path: ${{ vars.COLLECTOR }}/${{ vars.COLLECTOR }}-${{ inputs.date }}.sha
+          if-no-files-found: error
+
+      - name: ISO Table of contents
+        run: |
+          tree ${{ vars.COLLECTOR }} \
+            | tee ${{ vars.COLLECTOR }}/${{ vars.COLLECTOR }}-${{ inputs.date }}.iso.txt
+
+      - name: Upload ISO ToC artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso.txt
+          path: ${{ vars.COLLECTOR }}/${{ vars.COLLECTOR }}-${{ inputs.date }}.iso.txt
+          if-no-files-found: error
+
+      - name: Make ISO
+        run: |
+          mkisofs -J -R -v -T -l \
+            -V '${{ vars.COLLECTOR }}-${{ inputs.date }}' \
+            -A '${{ vars.COLLECTOR }}-${{ inputs.date }}' \
+            -o ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso \
+            ${{ vars.COLLECTOR }}
+
+      - name: Implant MD5 sum into iso
+        run: implantisomd5 ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso
+
+      - name: Generate ISO Hash
+        run: |
+          sha256sum -b ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso \
+          | tee ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso.sha
+
+      - name: Show ISO & Hash
+        run: ls -1sh *.iso*
+
+      - name: Upload ISO, ToC, and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso
+          path: ${{ vars.COLLECTOR }}-${{ inputs.date }}.iso*
+          if-no-files-found: error

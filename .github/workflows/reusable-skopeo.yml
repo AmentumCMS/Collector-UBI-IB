@@ -1,0 +1,61 @@
+name: Reusable - Skopeo Sync
+
+on:
+  workflow_call:
+    inputs:
+      date:
+        required: true
+        type: string
+
+jobs:
+  skopeo:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Install Skopeo
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y skopeo pigz
+
+      - name: ${{ vars.REGISTRY }} Login
+        run: |
+          skopeo login ${{ vars.REGISTRY }}  \
+            -u ${{ secrets.REGISTRY_USER }} \
+            -p ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Run Skopeo Sync
+        run: |
+          skopeo sync \
+            --src yaml --dest dir \
+            ${{ vars.COLLECTOR }}.yml \
+            ${{ vars.COLLECTOR }}
+
+      - name: Directory Contents
+        run: |
+          echo -e "Directory Contents\n$(ls -lAhS *)"
+          echo -e "\n\nDirectory Size\n$(du -hd1)"
+
+      - name: TARchive Skopeo Output
+        run: |
+          tar -cv -Ipigz --remove-files \
+            -f ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz ${{ vars.COLLECTOR }} \
+          | tee ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz.txt
+
+      - name: Generate Hash
+        run: |
+          sha256sum -b ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz | tee \
+            ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz.sha
+
+      - name: List files
+        run: ls -1sh ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz*
+
+      - name: Upload TARchive, ToC, and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz
+          path: ${{ vars.COLLECTOR }}-${{ inputs.date }}.tgz*
+          if-no-files-found: error

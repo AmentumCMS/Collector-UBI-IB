@@ -1,0 +1,49 @@
+name: Reusable - Sharepoint Upload
+
+on:
+  workflow_call:
+    inputs:
+      date:
+        required: true
+        type: string
+      file_path:
+        required: true
+        type: string
+        description: "Glob pattern for files to upload"
+      upload_path_suffix:
+        required: false
+        type: string
+        default: ""
+        description: "Optional suffix appended to base upload path (SHAREPOINT_BASEPATH/COLLECTOR)"
+
+jobs:
+  sharepoint:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Validate Artifacts
+        run: |
+          echo -e "Artifacts Downloaded\n$(find . -type f -iname *sha -execdir sha256sum -c {} \;)"
+
+      - name: Show Artifacts
+        run: ls -1sh ${{ vars.COLLECTOR }}-*.*
+
+      - name: Send Files to Sharepoint
+        uses: amentumcms/sharepoint-file-upload-action@main
+        with:
+          file_path: "${{ inputs.file_path }}"
+          host_name: "${{ secrets.SHAREPOINT_HOST }}"
+          site_name: "${{ secrets.SHAREPOINT_SITE }}"
+          upload_path: "${{ secrets.SHAREPOINT_BASEPATH }}/${{ vars.COLLECTOR }}/${{ inputs.upload_path_suffix }}"
+          tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
+          client_id: ${{ secrets.SHAREPOINT_APP_ID }}
+          client_secret: ${{ secrets.SHAREPOINT_APP_SECRET }}
+          login_endpoint: "login.microsoftonline.us"
+          graph_endpoint: "graph.microsoft.us"

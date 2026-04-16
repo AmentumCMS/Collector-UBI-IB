@@ -10,127 +10,24 @@ on:
 
 jobs:
   Date:
-    runs-on: ubuntu-24.04
-    outputs:
-      Date: ${{ steps.date.outputs.date }}
-    steps:
-      - name: Get current date
-        id: DATE
-        run: |
-          echo "Setting Date"
-          echo "DATE=$(date '+%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
-          echo -e "\nWrote to file:\n$GITHUB_OUTPUT\n"
-          echo "Values:"
-          cat $GITHUB_OUTPUT
+    uses: ./.github/workflows/reusable-date.yml
 
   Skopeo:
     needs: [Date]
-    runs-on: ubuntu-24.04
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Check out repository code
-        uses: actions/checkout@v4
-
-      - name: Install Skopeo
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y skopeo pigz
-
-      - name: ${{ vars.REGISTRY }} Login
-        run: |
-          skopeo login ${{ vars.REGISTRY }}  \
-            -u ${{ secrets.REGISTRY_USER }} \
-            -p ${{ secrets.REGISTRY_TOKEN }}
-
-      - name: Run Skopeo Sync
-        run: |
-          skopeo sync \
-            --src yaml --dest dir \
-            ${{ vars.COLLECTOR }}.yml \
-            ${{ vars.COLLECTOR }}
-
-      - name: Directory Contents
-        run: |
-          echo -e "Directory Contents\n$(ls -lAhS *)"
-          echo -e "\n\nDirectory Size\n$(du -hd1)"
-
-      - name: TARchive Skopeo Output
-        run: |
-          tar -cv -Ipigz --remove-files \
-            -f ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz ${{ vars.COLLECTOR }} \
-          | tee ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz.txt
-
-      - name: Generate Hash
-        run: |
-          sha256sum -b ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz | tee \
-            ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz.sha
-
-      - name: List files 
-        run: ls -1sh ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz*
-
-      - name: Upload TARchive, ToC, and hash
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz
-          path: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz*
-          if-no-files-found: error
+    uses: ./.github/workflows/reusable-skopeo.yml
+    with:
+      date: ${{ needs.Date.outputs.date }}
+    secrets: inherit
 
   Code:
     needs: [Date]
-    runs-on: ubuntu-24.04
+    uses: ./.github/workflows/reusable-code.yml
+    with:
+      date: ${{ needs.Date.outputs.date }}
+    secrets: inherit
     permissions:
       contents: write
       pull-requests: write
-    steps:
-      - name: Check out repository code
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-
-      - name: Setup Git
-        run: |
-          git config user.name "$(git log -n 1 --pretty=format:%an)"
-          git config user.email "$(git log -n 1 --pretty=format:%ae)"
-
-      - name: Bundle Repo1 code base for ${{ vars.COLLECTOR }}
-        run: |
-          git bundle create --progress ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle --all
-          echo -e "\nDirectory Listing\n$(ls -1sht *)"
-
-      - name: Generate Bundle Hash
-        run: |
-          sha256sum -b ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle | tee \
-            ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle.sha
-
-      - name: Upload bundle and hash
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle
-          path: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle*
-          if-no-files-found: error
-
-      - name: TARchive code base for ${{ vars.COLLECTOR }}
-        run: |
-          tar -cvC .. \
-            -f ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz $(basename ${{ github.WORKSPACE }}) \
-            | tee ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz.txt
-
-      - name: Generate TARchive Hash
-        run: |
-          sha256sum -b ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz | tee \
-            ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz.sha
-
-      - name: Directory Listing
-        run: echo -e "\nDirectory Listing for $PWD\n$(ls -1Ssh)"
-
-      - name: Upload Tarchive, ToC, and hash
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz
-          path: ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz*
-          if-no-files-found: error
 
   Release:
     runs-on: ubuntu-24.04
@@ -150,8 +47,6 @@ jobs:
       - name: Show Artifacts
         run: ls -1sh ${{ vars.COLLECTOR }}-*.*
 
-      # Create Release
-
       - name: Set up git
         run: |
           git config user.name "$(git log -n 1 --pretty=format:%an)"
@@ -161,17 +56,17 @@ jobs:
         uses: rickstaa/action-create-tag@v1
         id: tag_create
         with:
-          tag: ${{ needs.Date.outputs.Date }}
+          tag: ${{ needs.Date.outputs.date }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag_exists_error: false
-          message: "Release for ${{ needs.Date.outputs.Date }} run"
+          message: "Release for ${{ needs.Date.outputs.date }} run"
 
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ vars.COLLECTOR }} ${{ needs.Date.outputs.Date }}
-          tag_name: ${{ needs.Date.outputs.Date }}
+          name: ${{ vars.COLLECTOR }} ${{ needs.Date.outputs.date }}
+          tag_name: ${{ needs.Date.outputs.date }}
           make_latest: true
           files: |
-            ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}*.*
+            ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.date }}*.*

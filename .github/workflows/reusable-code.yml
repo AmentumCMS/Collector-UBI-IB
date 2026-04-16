@@ -1,0 +1,81 @@
+name: Reusable - Code Bundle
+
+on:
+  workflow_call:
+    inputs:
+      date:
+        required: true
+        type: string
+      update_submodules:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  code:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Setup Git
+        run: |
+          git config user.name "$(git log -n 1 --pretty=format:%an)"
+          git config user.email "$(git log -n 1 --pretty=format:%ae)"
+
+      - name: Update Submodules if needed
+        if: ${{ inputs.update_submodules }}
+        shell: bash
+        run: |
+          git submodule update --init --recursive --remote
+          set +e
+          git commit -am "Update Submodules"
+          if [ $? -eq 1 ];then
+            echo "No push required"
+          else
+            git push
+          fi
+
+      - name: Bundle Repo code base for ${{ vars.COLLECTOR }}
+        run: |
+          git bundle create --progress ${{ vars.COLLECTOR }}-${{ inputs.date }}.bundle --all
+          echo -e "\nDirectory Listing\n$(ls -1sht *)"
+
+      - name: Generate Bundle Hash
+        run: |
+          sha256sum -b ${{ vars.COLLECTOR }}-${{ inputs.date }}.bundle | tee \
+            ${{ vars.COLLECTOR }}-${{ inputs.date }}.bundle.sha
+
+      - name: Upload bundle and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ inputs.date }}.bundle
+          path: ${{ vars.COLLECTOR }}-${{ inputs.date }}.bundle*
+          if-no-files-found: error
+
+      - name: TARchive code base for ${{ vars.COLLECTOR }}
+        run: |
+          tar -cvC .. \
+            -f ${{ vars.COLLECTOR }}-code-${{ inputs.date }}.tgz $(basename ${{ github.workspace }}) \
+            | tee ${{ vars.COLLECTOR }}-code-${{ inputs.date }}.tgz.txt
+
+      - name: Generate TARchive Hash
+        run: |
+          sha256sum -b ${{ vars.COLLECTOR }}-code-${{ inputs.date }}.tgz | tee \
+            ${{ vars.COLLECTOR }}-code-${{ inputs.date }}.tgz.sha
+
+      - name: Directory Listing
+        run: echo -e "\nDirectory Listing for $PWD\n$(ls -1Ssh)"
+
+      - name: Upload TARchive, ToC, and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-code-${{ inputs.date }}.tgz
+          path: ${{ vars.COLLECTOR }}-code-${{ inputs.date }}.tgz*
+          if-no-files-found: error
