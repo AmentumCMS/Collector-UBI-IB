@@ -9,6 +9,7 @@ on:
 jobs:
   Date:
     uses: ./.github/workflows/reusable-date.yml
+    permissions: {}
 
   Skopeo:
     needs: [Date]
@@ -16,6 +17,8 @@ jobs:
     with:
       date: ${{ needs.Date.outputs.date }}
     secrets: inherit
+    permissions:
+      contents: read
 
   Code:
     needs: [Date]
