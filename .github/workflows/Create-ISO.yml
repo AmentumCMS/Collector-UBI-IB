@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 jobs:
   Date:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     outputs:
       Date: ${{ steps.date.outputs.date }}
     steps:
@@ -18,7 +18,7 @@ jobs:
           echo "Values:"
           cat $GITHUB_OUTPUT
   MakeISO:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     needs: [Date]
     env:
       GH_TOKEN: ${{ github.token }}
