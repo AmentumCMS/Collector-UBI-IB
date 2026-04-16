@@ -18,7 +18,7 @@ on:
 
 jobs:
   sharepoint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: read

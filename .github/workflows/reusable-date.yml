@@ -9,7 +9,7 @@ on:
 
 jobs:
   date:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions: {}
     outputs:
       date: ${{ steps.date.outputs.date }}
