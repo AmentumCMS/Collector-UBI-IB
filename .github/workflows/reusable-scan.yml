@@ -59,16 +59,16 @@ jobs:
             skopeo copy "docker://${FULL_IMAGE}" "docker-archive:${SAFE_NAME}.tar"
 
             echo "--- Trivy scan ---"
-            trivy image --input "${SAFE_NAME}.tar" --format json --output "scan-results/trivy-${SAFE_NAME}.json" || true
-            trivy image --input "${SAFE_NAME}.tar" --format table --output "scan-results/trivy-${SAFE_NAME}.txt" || true
+            trivy image --input "${SAFE_NAME}.tar" --format json --output "scan-results/trivy-${SAFE_NAME}.json" || echo "::warning::Trivy JSON scan failed for ${FULL_IMAGE}"
+            trivy image --input "${SAFE_NAME}.tar" --format table --output "scan-results/trivy-${SAFE_NAME}.txt" || echo "::warning::Trivy table scan failed for ${FULL_IMAGE}"
 
             echo "--- Grype scan ---"
-            grype "docker-archive:${SAFE_NAME}.tar" -o json > "scan-results/grype-${SAFE_NAME}.json" || true
-            grype "docker-archive:${SAFE_NAME}.tar" -o table > "scan-results/grype-${SAFE_NAME}.txt" || true
+            grype "docker-archive:${SAFE_NAME}.tar" -o json > "scan-results/grype-${SAFE_NAME}.json" || echo "::warning::Grype JSON scan failed for ${FULL_IMAGE}"
+            grype "docker-archive:${SAFE_NAME}.tar" -o table > "scan-results/grype-${SAFE_NAME}.txt" || echo "::warning::Grype table scan failed for ${FULL_IMAGE}"
 
             echo "--- Syft SBOM ---"
-            syft "docker-archive:${SAFE_NAME}.tar" -o json > "scan-results/syft-${SAFE_NAME}.json" || true
-            syft "docker-archive:${SAFE_NAME}.tar" -o table > "scan-results/syft-${SAFE_NAME}.txt" || true
+            syft "docker-archive:${SAFE_NAME}.tar" -o json > "scan-results/syft-${SAFE_NAME}.json" || echo "::warning::Syft JSON SBOM failed for ${FULL_IMAGE}"
+            syft "docker-archive:${SAFE_NAME}.tar" -o table > "scan-results/syft-${SAFE_NAME}.txt" || echo "::warning::Syft table SBOM failed for ${FULL_IMAGE}"
 
             rm -f "${SAFE_NAME}.tar"
             echo "::endgroup::"
