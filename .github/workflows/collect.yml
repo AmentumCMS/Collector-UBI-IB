@@ -73,7 +73,7 @@ jobs:
         run: ls -1sh ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz*
 
       - name: Upload TARchive, ToC, and hash
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz
           path: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz*
@@ -108,7 +108,7 @@ jobs:
             ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle.sha
 
       - name: Upload bundle and hash
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle
           path: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.bundle*
@@ -129,7 +129,7 @@ jobs:
         run: echo -e "\nDirectory Listing for $PWD\n$(ls -1Ssh)"
 
       - name: Upload Tarchive, ToC, and hash
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz
           path: ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz*
