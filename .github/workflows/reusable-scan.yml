@@ -1,0 +1,98 @@
+name: Reusable - Container Scans
+
+on:
+  workflow_call:
+    inputs:
+      date:
+        required: true
+        type: string
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Install Skopeo
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y skopeo
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -y
+          sudo apt-get install -y trivy
+
+      - name: Install Grype
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Install Syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: ${{ vars.REGISTRY }} Login
+        run: |
+          skopeo login ${{ vars.REGISTRY }} \
+            -u ${{ secrets.REGISTRY_USER }} \
+            -p ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Scan container images
+        run: |
+          mkdir -p scan-results
+          REGISTRY=$(yq 'keys | .[0]' ${{ vars.COLLECTOR }}.yml)
+
+          for IMAGE in $(yq ".[\"${REGISTRY}\"].\"images-by-tag-regex\" | keys | .[]" ${{ vars.COLLECTOR }}.yml); do
+            TAG=$(yq ".[\"${REGISTRY}\"].\"images-by-tag-regex\".\"${IMAGE}\"" ${{ vars.COLLECTOR }}.yml | tr -d '(^$)')
+            FULL_IMAGE="${REGISTRY}/${IMAGE}:${TAG}"
+            SAFE_NAME=$(echo "${IMAGE}" | tr '/' '_')
+
+            echo "::group::Scanning ${FULL_IMAGE}"
+
+            echo "--- Downloading image ---"
+            skopeo copy "docker://${FULL_IMAGE}" "docker-archive:${SAFE_NAME}.tar"
+
+            echo "--- Trivy scan ---"
+            trivy image --input "${SAFE_NAME}.tar" --format json --output "scan-results/trivy-${SAFE_NAME}.json" || true
+            trivy image --input "${SAFE_NAME}.tar" --format table --output "scan-results/trivy-${SAFE_NAME}.txt" || true
+
+            echo "--- Grype scan ---"
+            grype "docker-archive:${SAFE_NAME}.tar" -o json > "scan-results/grype-${SAFE_NAME}.json" || true
+            grype "docker-archive:${SAFE_NAME}.tar" -o table > "scan-results/grype-${SAFE_NAME}.txt" || true
+
+            echo "--- Syft SBOM ---"
+            syft "docker-archive:${SAFE_NAME}.tar" -o json > "scan-results/syft-${SAFE_NAME}.json" || true
+            syft "docker-archive:${SAFE_NAME}.tar" -o table > "scan-results/syft-${SAFE_NAME}.txt" || true
+
+            rm -f "${SAFE_NAME}.tar"
+            echo "::endgroup::"
+          done
+
+      - name: Show scan results
+        run: ls -1sh scan-results/
+
+      - name: TARchive scan results
+        run: |
+          tar -cvzf ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz -C scan-results . \
+          | tee ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz.txt
+
+      - name: Generate Hash
+        run: |
+          sha256sum -b ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz | tee \
+            ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz.sha
+
+      - name: List files
+        run: ls -1sh ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz*
+
+      - name: Upload scan results TARchive, ToC, and hash
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz
+          path: ${{ vars.COLLECTOR }}-${{ inputs.date }}-scans.tgz*
+          if-no-files-found: error

@@ -31,8 +31,17 @@ jobs:
       contents: write
       pull-requests: write
 
+  Scan:
+    needs: [Date]
+    uses: ./.github/workflows/reusable-scan.yml
+    with:
+      date: ${{ needs.Date.outputs.date }}
+    secrets: inherit
+    permissions:
+      contents: read
+
   MakeISO:
-    needs: [Date, Code, Skopeo]
+    needs: [Date, Code, Skopeo, Scan]
     uses: ./.github/workflows/reusable-make-iso.yml
     with:
       date: ${{ needs.Date.outputs.date }}
