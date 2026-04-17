@@ -183,6 +183,21 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
             | sudo sh -s -- -b /usr/local/bin
 
+      - name: Download report templates
+        run: |
+          set -euo pipefail
+          mkdir -p templates
+
+          curl -fsSL \
+            -o templates/trivy-html.tpl \
+            https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+
+          curl -fsSL \
+            -o templates/grype-html.tmpl \
+            https://raw.githubusercontent.com/anchore/grype/refs/heads/main/templates/html.tmpl
+
+          ls -l templates
+
       - name: Extract synced images
         run: |
           set -euo pipefail
@@ -205,7 +220,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p scan-images scan-results/trivy scan-results/grype
+          mkdir -p \
+            scan-images \
+            scan-results/trivy \
+            scan-results/trivy-html \
+            scan-results/grype \
+            scan-results/grype-html
+
           : > scan-images/archives.txt
 
           find "extracted/${{ vars.COLLECTOR }}" -type f -name manifest.json | while read -r manifest; do
@@ -230,7 +251,7 @@ jobs:
 
           echo "Archive list:"
           cat scan-images/archives.txt
-
+          
       - name: Trivy scan local synced images
         run: |
           set -euo pipefail
@@ -239,6 +260,7 @@ jobs:
           while IFS='|' read -r img_dir archive safe; do
             [ -n "$archive" ] || continue
             json_file="scan-results/trivy/${safe}.json"
+            html_file="scan-results/trivy-html/${safe}.html"
 
             echo "=== Scanning ${img_dir} ===" | tee -a scan-results/trivy-report.txt
 
@@ -254,6 +276,13 @@ jobs:
               echo "FATAL: JSON output missing for ${img_dir} (${json_file})" | tee -a scan-results/trivy-report.txt
               continue
             fi
+
+            trivy convert \
+              --format template \
+              --template "@templates/trivy-html.tpl" \
+              --output "$html_file" \
+              "$json_file" \
+              >> scan-results/trivy-report.txt 2>&1 || true
 
             echo "=== ${img_dir} ===" >> scan-results/trivy-report.txt
             trivy convert --format table "$json_file" >> scan-results/trivy-report.txt 2>&1 || true
@@ -273,10 +302,28 @@ jobs:
           while IFS='|' read -r img_dir archive safe; do
             [ -n "$archive" ] || continue
 
+            json_file="scan-results/grype/${safe}.json"
+            html_file="scan-results/grype-html/${safe}.html"
+
             echo "=== Scanning ${img_dir} ===" | tee -a scan-results/grype-report.txt
+
             grype "docker-archive:${archive}" -o json \
-              > "scan-results/grype/${safe}.json" \
+              > "$json_file" \
               2>> scan-results/grype-report.txt || true
+
+            grype "docker-archive:${archive}" \
+              -o template \
+              -t templates/grype-html.tmpl \
+              > "$html_file" \
+              2>> scan-results/grype-report.txt || true
+
+            if [ ! -s "$json_file" ]; then
+              echo "FATAL: JSON output missing for ${img_dir} (${json_file})" | tee -a scan-results/grype-report.txt
+            fi
+
+            if [ ! -s "$html_file" ]; then
+              echo "FATAL: HTML output missing for ${img_dir} (${html_file})" | tee -a scan-results/grype-report.txt
+            fi
           done < scan-images/archives.txt
 
       - name: Upload scan evidence
@@ -287,6 +334,7 @@ jobs:
           path: |
             scan-results/
             scan-images/archives.txt
+            templates/
           if-no-files-found: error
 
   MakeISO:
