@@ -141,20 +141,31 @@ jobs:
     needs: [Date, Skopeo]
     env:
       GH_TOKEN: ${{ github.token }}
-      GRYPE_FAIL_ON: "high"
     steps:
-      - name: Check out repository code
-        uses: actions/checkout@v6
+      - name: Download skopeo artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz
+          path: scan-input
+
+      - name: Show downloaded files
+        run: |
+          set -euo pipefail
+          echo "Downloaded files:"
+          find scan-input -maxdepth 2 -type f | sort
 
       - name: Install dependencies
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y curl jq
+          sudo apt-get install -y curl tar jq
 
-      - name: Install Trivy + Grype
+      - name: Install Trivy + Grype + skopeo
         run: |
           set -euo pipefail
+
+          sudo apt-get update -y
+          sudo apt-get install -y skopeo
 
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sudo sh -s -- -b /usr/local/bin
@@ -162,84 +173,158 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
             | sudo sh -s -- -b /usr/local/bin
 
-      - name: Login to registry
+      - name: Download report templates
         run: |
           set -euo pipefail
-          echo "${{ secrets.REGISTRY_TOKEN }}" \
-            | docker login "${{ vars.REGISTRY }}" -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+          mkdir -p templates
 
-      - name: Build image list from collector file
+          curl -fsSL \
+            -o templates/trivy-html.tpl \
+            https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+
+          curl -fsSL \
+            -o templates/grype-html.tmpl \
+            https://raw.githubusercontent.com/anchore/grype/refs/heads/main/templates/html.tmpl
+
+          ls -l templates
+
+      - name: Extract synced images
         run: |
           set -euo pipefail
 
-          # Assumes the collector file contains one image reference per relevant line
-          # and ignores comments / blank lines / top-level yaml keys.
-          grep -vE '^\s*#|^\s*$|^[A-Za-z0-9_-]+:\s*$' "${{ vars.COLLECTOR }}.yml" \
-            | sed 's/^[[:space:]-]*//' \
-            | sed 's/[[:space:]]*$//' \
-            > images.txt
+          mkdir -p extracted
 
-          echo "Resolved images:"
-          cat images.txt
-
-          test -s images.txt || {
-            echo "ERROR: no images found in ${{ vars.COLLECTOR }}.yml"
+          tgz="$(find scan-input -type f -name '*.tgz' | head -n 1)"
+          [ -n "$tgz" ] || {
+            echo "ERROR: no skopeo tgz artifact found"
             exit 1
           }
 
-      - name: Trivy scan
+          echo "Extracting $tgz"
+          tar -xvf "$tgz" -C extracted
+
+          echo "Extracted contents:"
+          find extracted -maxdepth 4 -type f | sort | head -200
+
+      - name: Build local archive list from synced images
         run: |
           set -euo pipefail
-          mkdir -p scan-results/trivy
+
+          mkdir -p \
+            scan-images \
+            scan-results/trivy \
+            scan-results/trivy-html \
+            scan-results/grype \
+            scan-results/grype-html
+
+          : > scan-images/archives.txt
+
+          find "extracted/${{ vars.COLLECTOR }}" -type f -name manifest.json | while read -r manifest; do
+            img_dir="$(dirname "$manifest")"
+            rel="${img_dir#extracted/${{ vars.COLLECTOR }}/}"
+            safe="$(printf '%s' "$rel" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+            archive="scan-images/${safe}.tar"
+
+            echo "Preparing archive from dir transport: $img_dir"
+
+            skopeo copy \
+              "dir:${img_dir}" \
+              "docker-archive:${archive}:${safe}"
+
+            echo "${img_dir}|${archive}|${safe}" >> scan-images/archives.txt
+          done
+
+          test -s scan-images/archives.txt || {
+            echo "ERROR: no synced images found for scanning"
+            exit 1
+          }
+
+          echo "Archive list:"
+          cat scan-images/archives.txt
+          
+      - name: Trivy scan local synced images
+        run: |
+          set -euo pipefail
           : > scan-results/trivy-report.txt
 
-          while read -r img; do
-            [ -n "$img" ] || continue
-            safe="$(printf '%s' "$img" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+          while IFS='|' read -r img_dir archive safe; do
+            [ -n "$archive" ] || continue
             json_file="scan-results/trivy/${safe}.json"
+            html_file="scan-results/trivy-html/${safe}.html"
 
-            echo "=== Scanning $img ===" | tee -a scan-results/trivy-report.txt
+            echo "=== Scanning ${img_dir} ===" | tee -a scan-results/trivy-report.txt
 
-            trivy image --quiet --scanners vuln \
-              --format json -o "$json_file" "$img" \
+            trivy image \
+              --quiet \
+              --scanners vuln \
+              --input "$archive" \
+              --format json \
+              -o "$json_file" \
               >> scan-results/trivy-report.txt 2>&1 || true
 
             if [ ! -s "$json_file" ]; then
-              echo "FATAL: JSON output missing for $img ($json_file)" | tee -a scan-results/trivy-report.txt
+              echo "FATAL: JSON output missing for ${img_dir} (${json_file})" | tee -a scan-results/trivy-report.txt
               continue
             fi
 
-            echo "=== $img ===" >> scan-results/trivy-report.txt
+            trivy convert \
+              --format template \
+              --template "@templates/trivy-html.tpl" \
+              --output "$html_file" \
+              "$json_file" \
+              >> scan-results/trivy-report.txt 2>&1 || true
+
+            echo "=== ${img_dir} ===" >> scan-results/trivy-report.txt
             trivy convert --format table "$json_file" >> scan-results/trivy-report.txt 2>&1 || true
             echo >> scan-results/trivy-report.txt
-          done < images.txt
+          done < scan-images/archives.txt
 
           if grep -Eqi 'Fatal error|FATAL' scan-results/trivy-report.txt; then
             echo "Compliance failed: Trivy fatal/conversion error."
             exit 1
           fi
 
-      - name: Grype scan
+      - name: Grype scan local synced images
         run: |
           set -euo pipefail
-          mkdir -p scan-results/grype
           : > scan-results/grype-report.txt
 
-          while read -r img; do
-            [ -n "$img" ] || continue
-            safe="$(printf '%s' "$img" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+          while IFS='|' read -r img_dir archive safe; do
+            [ -n "$archive" ] || continue
 
-            echo "=== Scanning $img ===" | tee -a scan-results/grype-report.txt
-            grype "$img" -o json > "scan-results/grype/${safe}.json" \
+            json_file="scan-results/grype/${safe}.json"
+            html_file="scan-results/grype-html/${safe}.html"
+
+            echo "=== Scanning ${img_dir} ===" | tee -a scan-results/grype-report.txt
+
+            grype "docker-archive:${archive}" -o json \
+              > "$json_file" \
               2>> scan-results/grype-report.txt || true
-          done < images.txt
+
+            grype "docker-archive:${archive}" \
+              -o template \
+              -t templates/grype-html.tmpl \
+              > "$html_file" \
+              2>> scan-results/grype-report.txt || true
+
+            if [ ! -s "$json_file" ]; then
+              echo "FATAL: JSON output missing for ${img_dir} (${json_file})" | tee -a scan-results/grype-report.txt
+            fi
+
+            if [ ! -s "$html_file" ]; then
+              echo "FATAL: HTML output missing for ${img_dir} (${html_file})" | tee -a scan-results/grype-report.txt
+            fi
+          done < scan-images/archives.txt
 
       - name: Upload scan evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}-scan
-          path: scan-results/
+          path: |
+            scan-results/
+            scan-images/archives.txt
+            templates/
           if-no-files-found: error
 
   MakeISO:
