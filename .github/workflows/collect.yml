@@ -316,6 +316,99 @@ jobs:
             fi
           done < scan-images/archives.txt
 
+      - name: Write vulnerability summary
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          trivy_dir = Path("scan-results/trivy")
+          grype_dir = Path("scan-results/grype")
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+
+          severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+
+          def empty_counts():
+              return {s: 0 for s in severities}
+
+          def safe_sev(value):
+              sev = str(value or "UNKNOWN").upper()
+              return sev if sev in severities else "UNKNOWN"
+
+          trivy_total_counts = empty_counts()
+          grype_total_counts = empty_counts()
+          trivy_rows = []
+          grype_rows = []
+
+          for jf in sorted(trivy_dir.glob("*.json")):
+              try:
+                  data = json.loads(jf.read_text())
+              except Exception:
+                  continue
+
+              counts = empty_counts()
+              for result in data.get("Results", []):
+                  for vuln in result.get("Vulnerabilities", []) or []:
+                      sev = safe_sev(vuln.get("Severity"))
+                      counts[sev] += 1
+                      trivy_total_counts[sev] += 1
+
+              total = sum(counts.values())
+              trivy_rows.append((jf.stem, counts, total))
+
+          for jf in sorted(grype_dir.glob("*.json")):
+              try:
+                  data = json.loads(jf.read_text())
+              except Exception:
+                  continue
+
+              counts = empty_counts()
+              for match in data.get("matches", []) or []:
+                  sev = safe_sev((match.get("vulnerability", {}) or {}).get("severity"))
+                  counts[sev] += 1
+                  grype_total_counts[sev] += 1
+
+              total = sum(counts.values())
+              grype_rows.append((jf.stem, counts, total))
+
+          def counts_table(title, totals):
+              lines = []
+              lines.append(f"## {title}")
+              lines.append("")
+              lines.append("| Severity | Count |")
+              lines.append("|---|---:|")
+              for sev in severities:
+                  lines.append(f"| {sev} | {totals[sev]} |")
+              lines.append(f"| **TOTAL** | **{sum(totals.values())}** |")
+              lines.append("")
+              return lines
+
+          def per_image_table(title, rows):
+              lines = []
+              lines.append(f"## {title}")
+              lines.append("")
+              lines.append("| Image | Critical | High | Medium | Low | Unknown | Total |")
+              lines.append("|---|---:|---:|---:|---:|---:|---:|")
+              for name, counts, total in rows:
+                  lines.append(
+                      f"| `{name}` | {counts['CRITICAL']} | {counts['HIGH']} | {counts['MEDIUM']} | {counts['LOW']} | {counts['UNKNOWN']} | {total} |"
+                  )
+              lines.append("")
+              return lines
+
+          lines = ["# Vulnerability Summary", ""]
+          lines += counts_table("Trivy Totals", trivy_total_counts)
+          lines += counts_table("Grype Totals", grype_total_counts)
+          lines += per_image_table("Trivy Per Image", trivy_rows)
+          lines += per_image_table("Grype Per Image", grype_rows)
+
+          with summary_path.open("a", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          PY
+          
       - name: Upload scan evidence
         if: always()
         uses: actions/upload-artifact@v7
