@@ -148,10 +148,9 @@ jobs:
   Scan:
     name: Compliance scan (Trivy + Grype)
     runs-on: ubuntu-latest
-    needs: [Date, Skopeo]
+    needs: [Date]
     env:
       GH_TOKEN: ${{ github.token }}
-      GRYPE_FAIL_ON: "high"
     steps:
       - name: Check out repository code
         uses: actions/checkout@v6
@@ -160,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y curl jq
+          sudo apt-get install -y curl jq python3 python3-yaml skopeo
 
       - name: Install Trivy + Grype
         run: |
@@ -175,27 +174,88 @@ jobs:
       - name: Login to registry
         run: |
           set -euo pipefail
-          echo "${{ secrets.REGISTRY_TOKEN }}" \
-            | docker login "${{ vars.REGISTRY }}" -u "${{ secrets.REGISTRY_USER }}" --password-stdin
 
-      - name: Build image list from collector file
+          skopeo login "${{ vars.REGISTRY }}" \
+            -u "${{ secrets.REGISTRY_USER }}" \
+            -p "${{ secrets.REGISTRY_TOKEN }}"
+
+          echo "${{ secrets.REGISTRY_TOKEN }}" \
+            | docker login "${{ vars.REGISTRY }}" \
+                -u "${{ secrets.REGISTRY_USER }}" \
+                --password-stdin
+
+      - name: Resolve images from collector YAML
         run: |
           set -euo pipefail
 
-          # Assumes the collector file contains one image reference per relevant line
-          # and ignores comments / blank lines / top-level yaml keys.
-          grep -vE '^\s*#|^\s*$|^[A-Za-z0-9_-]+:\s*$' "${{ vars.COLLECTOR }}.yml" \
-            | sed 's/^[[:space:]-]*//' \
-            | sed 's/[[:space:]]*$//' \
-            > images.txt
+          python3 <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
 
-          echo "Resolved images:"
-          cat images.txt
+          import yaml
+
+          collector_file = Path("${{ vars.COLLECTOR }}.yml")
+          data = yaml.safe_load(collector_file.read_text())
+
+          registry = "${{ vars.REGISTRY }}"
+          block = data.get(registry)
+          if not isinstance(block, dict):
+              raise SystemExit(f"Registry '{registry}' not found in {collector_file}")
+
+          images_by_tag_regex = block.get("images-by-tag-regex", {})
+          if not isinstance(images_by_tag_regex, dict) or not images_by_tag_regex:
+              raise SystemExit(f"No images-by-tag-regex block found for {registry}")
+
+          resolved = []
+
+          for repo, pattern in images_by_tag_regex.items():
+              regex = str(pattern).strip()
+              try:
+                  compiled = re.compile(regex)
+              except re.error as e:
+                  raise SystemExit(f"Invalid regex for {repo}: {regex} ({e})")
+
+              full_repo = f"{registry}/{repo}"
+              print(f"Resolving tags for {full_repo} with regex {regex}", file=sys.stderr)
+
+              proc = subprocess.run(
+                  ["skopeo", "list-tags", f"docker://{full_repo}"],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+
+              if proc.returncode != 0:
+                  print(proc.stdout, file=sys.stderr)
+                  print(proc.stderr, file=sys.stderr)
+                  raise SystemExit(f"Failed to list tags for {full_repo}")
+
+              payload = json.loads(proc.stdout)
+              tags = payload.get("Tags", []) or []
+
+              matches = sorted(tag for tag in tags if compiled.search(tag))
+              if not matches:
+                  raise SystemExit(f"No tags matched {regex} for {full_repo}")
+
+              for tag in matches:
+                  resolved.append(f"{full_repo}:{tag}")
+
+          Path("images.txt").write_text("\n".join(resolved) + "\n")
+          print("Resolved images:")
+          for image in resolved:
+              print(image)
+          PY
 
           test -s images.txt || {
-            echo "ERROR: no images found in ${{ vars.COLLECTOR }}.yml"
+            echo "ERROR: no images resolved from ${{ vars.COLLECTOR }}.yml"
             exit 1
           }
+
+      - name: Show resolved images
+        run: cat images.txt
 
       - name: Trivy scan
         run: |
@@ -210,8 +270,12 @@ jobs:
 
             echo "=== Scanning $img ===" | tee -a scan-results/trivy-report.txt
 
-            trivy image --quiet --scanners vuln \
-              --format json -o "$json_file" "$img" \
+            trivy image \
+              --quiet \
+              --scanners vuln \
+              --format json \
+              -o "$json_file" \
+              "$img" \
               >> scan-results/trivy-report.txt 2>&1 || true
 
             if [ ! -s "$json_file" ]; then
