@@ -133,6 +133,7 @@ jobs:
         with:
           name: ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz
           path: ${{ vars.COLLECTOR }}-code-${{ needs.Date.outputs.Date }}.tgz*
+          if-no-files-found: error
 
   Scan:
     name: Compliance scan (Trivy + Grype)
