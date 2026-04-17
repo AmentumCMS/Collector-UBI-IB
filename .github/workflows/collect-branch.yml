@@ -174,15 +174,9 @@ jobs:
       - name: Login to registry
         run: |
           set -euo pipefail
-
           skopeo login "${{ vars.REGISTRY }}" \
             -u "${{ secrets.REGISTRY_USER }}" \
             -p "${{ secrets.REGISTRY_TOKEN }}"
-
-          echo "${{ secrets.REGISTRY_TOKEN }}" \
-            | docker login "${{ vars.REGISTRY }}" \
-                -u "${{ secrets.REGISTRY_USER }}" \
-                --password-stdin
 
       - name: Resolve images from collector YAML
         run: |
@@ -194,7 +188,6 @@ jobs:
           import subprocess
           import sys
           from pathlib import Path
-
           import yaml
 
           collector_file = Path("${{ vars.COLLECTOR }}.yml")
@@ -257,15 +250,40 @@ jobs:
       - name: Show resolved images
         run: cat images.txt
 
+      - name: Copy images locally for scanning
+        run: |
+          set -euo pipefail
+          mkdir -p scan-images
+          : > scan-images/archives.txt
+
+          while read -r img; do
+            [ -n "$img" ] || continue
+
+            safe="$(printf '%s' "$img" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+            archive="scan-images/${safe}.tar"
+
+            echo "=== Copying $img to $archive ==="
+            skopeo copy \
+              --retry-times 3 \
+              "docker://${img}" \
+              "docker-archive:${archive}:${img}"
+
+            echo "${img}|${archive}|${safe}" >> scan-images/archives.txt
+          done < images.txt
+
+          test -s scan-images/archives.txt || {
+            echo "ERROR: no scan archives created"
+            exit 1
+          }
+
       - name: Trivy scan
         run: |
           set -euo pipefail
           mkdir -p scan-results/trivy
           : > scan-results/trivy-report.txt
 
-          while read -r img; do
+          while IFS='|' read -r img archive safe; do
             [ -n "$img" ] || continue
-            safe="$(printf '%s' "$img" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
             json_file="scan-results/trivy/${safe}.json"
 
             echo "=== Scanning $img ===" | tee -a scan-results/trivy-report.txt
@@ -273,9 +291,9 @@ jobs:
             trivy image \
               --quiet \
               --scanners vuln \
+              --input "$archive" \
               --format json \
               -o "$json_file" \
-              "$img" \
               >> scan-results/trivy-report.txt 2>&1 || true
 
             if [ ! -s "$json_file" ]; then
@@ -286,7 +304,7 @@ jobs:
             echo "=== $img ===" >> scan-results/trivy-report.txt
             trivy convert --format table "$json_file" >> scan-results/trivy-report.txt 2>&1 || true
             echo >> scan-results/trivy-report.txt
-          done < images.txt
+          done < scan-images/archives.txt
 
           if grep -Eqi 'Fatal error|FATAL' scan-results/trivy-report.txt; then
             echo "Compliance failed: Trivy fatal/conversion error."
@@ -299,23 +317,24 @@ jobs:
           mkdir -p scan-results/grype
           : > scan-results/grype-report.txt
 
-          while read -r img; do
+          while IFS='|' read -r img archive safe; do
             [ -n "$img" ] || continue
-            safe="$(printf '%s' "$img" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
 
             echo "=== Scanning $img ===" | tee -a scan-results/grype-report.txt
-            grype "$img" -o json > "scan-results/grype/${safe}.json" \
+            grype "docker-archive:${archive}" -o json \
+              > "scan-results/grype/${safe}.json" \
               2>> scan-results/grype-report.txt || true
-          done < images.txt
+          done < scan-images/archives.txt
 
       - name: Upload scan evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}-scan
-          path: scan-results/
+          path: |
+            scan-results/
+            scan-images/archives.txt
           if-no-files-found: error
-
   MakeISO:
     runs-on: ubuntu-latest
     needs: [Date, Code, Skopeo, Scan]
