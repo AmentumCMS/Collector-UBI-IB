@@ -148,22 +148,34 @@ jobs:
   Scan:
     name: Compliance scan (Trivy + Grype)
     runs-on: ubuntu-latest
-    needs: [Date]
+    needs: [Date, Skopeo]
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check out repository code
-        uses: actions/checkout@v6
+      - name: Download skopeo artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ vars.COLLECTOR }}-${{ needs.Date.outputs.Date }}.tgz
+          path: scan-input
+
+      - name: Show downloaded files
+        run: |
+          set -euo pipefail
+          echo "Downloaded files:"
+          find scan-input -maxdepth 2 -type f | sort
 
       - name: Install dependencies
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y curl jq python3 python3-yaml skopeo
+          sudo apt-get install -y curl tar jq
 
-      - name: Install Trivy + Grype
+      - name: Install Trivy + Grype + skopeo
         run: |
           set -euo pipefail
+
+          sudo apt-get update -y
+          sudo apt-get install -y skopeo
 
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sudo sh -s -- -b /usr/local/bin
@@ -171,122 +183,64 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
             | sudo sh -s -- -b /usr/local/bin
 
-      - name: Login to registry
-        run: |
-          set -euo pipefail
-          skopeo login "${{ vars.REGISTRY }}" \
-            -u "${{ secrets.REGISTRY_USER }}" \
-            -p "${{ secrets.REGISTRY_TOKEN }}"
-
-      - name: Resolve images from collector YAML
+      - name: Extract synced images
         run: |
           set -euo pipefail
 
-          python3 <<'PY'
-          import json
-          import re
-          import subprocess
-          import sys
-          from pathlib import Path
-          import yaml
+          mkdir -p extracted
 
-          collector_file = Path("${{ vars.COLLECTOR }}.yml")
-          data = yaml.safe_load(collector_file.read_text())
-
-          registry = "${{ vars.REGISTRY }}"
-          block = data.get(registry)
-          if not isinstance(block, dict):
-              raise SystemExit(f"Registry '{registry}' not found in {collector_file}")
-
-          images_by_tag_regex = block.get("images-by-tag-regex", {})
-          if not isinstance(images_by_tag_regex, dict) or not images_by_tag_regex:
-              raise SystemExit(f"No images-by-tag-regex block found for {registry}")
-
-          resolved = []
-
-          for repo, pattern in images_by_tag_regex.items():
-              regex = str(pattern).strip()
-              try:
-                  compiled = re.compile(regex)
-              except re.error as e:
-                  raise SystemExit(f"Invalid regex for {repo}: {regex} ({e})")
-
-              full_repo = f"{registry}/{repo}"
-              print(f"Resolving tags for {full_repo} with regex {regex}", file=sys.stderr)
-
-              proc = subprocess.run(
-                  ["skopeo", "list-tags", f"docker://{full_repo}"],
-                  capture_output=True,
-                  text=True,
-                  check=False,
-              )
-
-              if proc.returncode != 0:
-                  print(proc.stdout, file=sys.stderr)
-                  print(proc.stderr, file=sys.stderr)
-                  raise SystemExit(f"Failed to list tags for {full_repo}")
-
-              payload = json.loads(proc.stdout)
-              tags = payload.get("Tags", []) or []
-
-              matches = sorted(tag for tag in tags if compiled.search(tag))
-              if not matches:
-                  raise SystemExit(f"No tags matched {regex} for {full_repo}")
-
-              for tag in matches:
-                  resolved.append(f"{full_repo}:{tag}")
-
-          Path("images.txt").write_text("\n".join(resolved) + "\n")
-          print("Resolved images:")
-          for image in resolved:
-              print(image)
-          PY
-
-          test -s images.txt || {
-            echo "ERROR: no images resolved from ${{ vars.COLLECTOR }}.yml"
+          tgz="$(find scan-input -type f -name '*.tgz' | head -n 1)"
+          [ -n "$tgz" ] || {
+            echo "ERROR: no skopeo tgz artifact found"
             exit 1
           }
 
-      - name: Show resolved images
-        run: cat images.txt
+          echo "Extracting $tgz"
+          tar -xvf "$tgz" -C extracted
 
-      - name: Copy images locally for scanning
+          echo "Extracted contents:"
+          find extracted -maxdepth 4 -type f | sort | head -200
+
+      - name: Build local archive list from synced images
         run: |
           set -euo pipefail
-          mkdir -p scan-images
+
+          mkdir -p scan-images scan-results/trivy scan-results/grype
           : > scan-images/archives.txt
 
-          while read -r img; do
-            [ -n "$img" ] || continue
-
-            safe="$(printf '%s' "$img" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+          find "extracted/${{ vars.COLLECTOR }}" -type f -name manifest.json | while read -r manifest; do
+            img_dir="$(dirname "$manifest")"
+            rel="${img_dir#extracted/${{ vars.COLLECTOR }}/}"
+            safe="$(printf '%s' "$rel" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
             archive="scan-images/${safe}.tar"
 
-            echo "=== Copying $img to $archive ==="
-            skopeo copy \
-              --retry-times 3 \
-              "docker://${img}" \
-              "docker-archive:${archive}:${img}"
+            echo "Preparing archive from dir transport: $img_dir"
 
-            echo "${img}|${archive}|${safe}" >> scan-images/archives.txt
-          done < images.txt
+            skopeo copy \
+              "dir:${img_dir}" \
+              "docker-archive:${archive}:${safe}"
+
+            echo "${img_dir}|${archive}|${safe}" >> scan-images/archives.txt
+          done
 
           test -s scan-images/archives.txt || {
-            echo "ERROR: no scan archives created"
+            echo "ERROR: no synced images found for scanning"
             exit 1
           }
 
-      - name: Trivy scan
+          echo "Archive list:"
+          cat scan-images/archives.txt
+
+      - name: Trivy scan local synced images
         run: |
           set -euo pipefail
-          mkdir -p scan-results/trivy
           : > scan-results/trivy-report.txt
 
-          while IFS='|' read -r img archive safe; do
-            [ -n "$img" ] || continue
+          while IFS='|' read -r img_dir archive safe; do
+            [ -n "$archive" ] || continue
             json_file="scan-results/trivy/${safe}.json"
 
-            echo "=== Scanning $img ===" | tee -a scan-results/trivy-report.txt
+            echo "=== Scanning ${img_dir} ===" | tee -a scan-results/trivy-report.txt
 
             trivy image \
               --quiet \
@@ -297,11 +251,11 @@ jobs:
               >> scan-results/trivy-report.txt 2>&1 || true
 
             if [ ! -s "$json_file" ]; then
-              echo "FATAL: JSON output missing for $img ($json_file)" | tee -a scan-results/trivy-report.txt
+              echo "FATAL: JSON output missing for ${img_dir} (${json_file})" | tee -a scan-results/trivy-report.txt
               continue
             fi
 
-            echo "=== $img ===" >> scan-results/trivy-report.txt
+            echo "=== ${img_dir} ===" >> scan-results/trivy-report.txt
             trivy convert --format table "$json_file" >> scan-results/trivy-report.txt 2>&1 || true
             echo >> scan-results/trivy-report.txt
           done < scan-images/archives.txt
@@ -311,16 +265,15 @@ jobs:
             exit 1
           fi
 
-      - name: Grype scan
+      - name: Grype scan local synced images
         run: |
           set -euo pipefail
-          mkdir -p scan-results/grype
           : > scan-results/grype-report.txt
 
-          while IFS='|' read -r img archive safe; do
-            [ -n "$img" ] || continue
+          while IFS='|' read -r img_dir archive safe; do
+            [ -n "$archive" ] || continue
 
-            echo "=== Scanning $img ===" | tee -a scan-results/grype-report.txt
+            echo "=== Scanning ${img_dir} ===" | tee -a scan-results/grype-report.txt
             grype "docker-archive:${archive}" -o json \
               > "scan-results/grype/${safe}.json" \
               2>> scan-results/grype-report.txt || true
@@ -335,6 +288,7 @@ jobs:
             scan-results/
             scan-images/archives.txt
           if-no-files-found: error
+
   MakeISO:
     runs-on: ubuntu-latest
     needs: [Date, Code, Skopeo, Scan]
