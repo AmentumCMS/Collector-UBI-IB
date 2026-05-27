@@ -6,3 +6,6 @@ registry1.dso.mil:
     ironbank/redhat/ubi/ubi9-micro: ^9.8$
     ironbank/redhat/ubi/ubi9-minimal: ^9.8$
     ironbank/redhat/ubi/ubi9: ^9.8$
+    ironbank/redhat/ubi/ubi10-micro: ^10.2$
+    ironbank/redhat/ubi/ubi10-minimal: ^10.2$
+    ironbank/redhat/ubi/ubi10: ^10.2$
