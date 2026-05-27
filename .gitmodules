@@ -16,3 +16,12 @@
 [submodule "ubi9-micro-ib"]
 	path = ubi9-micro-ib
 	url = https://repo1.dso.mil/dsop/redhat/ubi/9.x/ubi9-micro.git
+[submodule "ubi10-ib"]
+	path = ubi10-ib
+	url = https://repo1.dso.mil/dsop/redhat/ubi/10.x/ubi10.git
+[submodule "ubi10-minimal-ib"]
+	path = ubi10-minimal-ib
+	url = https://repo1.dso.mil/dsop/redhat/ubi/10.x/ubi10-minimal.git
+[submodule "ubi10-micro-ib"]
+	path = ubi10-micro-ib
+	url = https://repo1.dso.mil/dsop/redhat/ubi/10.x/ubi10-micro.git
