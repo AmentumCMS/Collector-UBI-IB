@@ -1,4 +1,4 @@
-name: UBI-IB Main Collection Sharepoint Upload
+name: UBI-IB Sharepoint Upload
 on:
   release:
     types: [edited, released]
@@ -44,11 +44,7 @@ jobs:
         run: |
           sudo echo -e "Disk freespace and mounts\n$(df -hT)\n\n$(mount)" | tee runner-disks.txt
 
-      - name: Download release assets for selected tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.Context.outputs.release_tag }}
-        shell: bash
+      - name: Download Artifacts
         run: |
           mkdir -p release-assets
           gh release download "$TAG" \
@@ -68,7 +64,7 @@ jobs:
       - name: Send Files to Sharepoint
         uses: amentumcms/sharepoint-file-upload-action@main
         with:
-          file_path: "release-assets/${{ vars.COLLECTOR }}-*.*"
+          file_path: "release-assets/*"
           host_name: "${{ secrets.SHAREPOINT_HOST }}"
           site_name: "${{ secrets.SHAREPOINT_SITE }}"
           upload_path: "${{ secrets.SHAREPOINT_BASEPATH }}/${{ vars.COLLECTOR }}/${{ needs.Context.outputs.release_tag }}"
