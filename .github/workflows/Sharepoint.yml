@@ -13,7 +13,11 @@ jobs:
         id: DATE
         run: |
           echo "Setting Date"
-          echo "DATE=$(date '+%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+          DATE="${{ github.event.release.tag_name }}"
+          if [ -z "$DATE" ]; then
+            DATE=$(date '+%Y%m%d-%H%M')
+          fi
+          echo "DATE=$DATE" >> $GITHUB_OUTPUT
           echo -e "\nWrote to file:\n$GITHUB_OUTPUT\n"
           echo "Values:"
           cat $GITHUB_OUTPUT
@@ -23,21 +27,31 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Determine runner mounts
         run: |
           sudo echo -e "Disk freespace and mounts\n$(df -hT)\n\n$(mount)" | tee runner-disks.txt
       - name: Download Artifacts
-        uses: actions/download-artifact@v8
-        with:
-          merge-multiple: true
-
-      - name: Show Artifacts
-        run: ls -1sh | tee artifact-listing.txt
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release list --repo ${{ github.repository }} --limit 1 --json tagName -q '.[0].tagName')
+            echo "No release tag in event context, using latest release: $TAG"
+          fi
+          echo "Downloading release assets for tag: $TAG"
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            --dir . \
+            --clobber
 
       - name: Validate Artifacts
         run: |
           echo -e "Artifacts Downloaded\n$(find . -type f -iname *sha -execdir sha256sum -c {} \;)"
+
+      - name: Show Artifacts
+        run: ls -1sh | tee artifact-listing.txt
 
       # Upload files to Sharepoint
 
