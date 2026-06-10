@@ -42,6 +42,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Check out repository code
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+          lfs: true
+
       - name: Determine runner mounts
         run: |
           sudo echo -e "Disk freespace and mounts\n$(df -hT)\n\n$(mount)" | tee runner-disks.txt
