@@ -1,4 +1,4 @@
-name: UBI-IB Main Collection Sharepoint Upload
+name: UBI-IB Sharepoint Upload
 on:
   release:
     types: [edited, released]
@@ -32,12 +32,12 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Show Artifacts
+        run: ls -1sh | tee artifact-listing.txt
+
       - name: Validate Artifacts
         run: |
           echo -e "Artifacts Downloaded\n$(find . -type f -iname *sha -execdir sha256sum -c {} \;)"
-
-      - name: Show Artifacts
-        run: ls -1sh ${{ vars.COLLECTOR }}-*.*
 
       # Upload files to Sharepoint
 
