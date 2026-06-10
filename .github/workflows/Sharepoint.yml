@@ -3,29 +3,41 @@ on:
   release:
     types: [edited, released]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to process (example: 20260601-0019)"
+        required: true
+        type: string
+
 jobs:
-  Date:
+  Context:
     runs-on: ubuntu-latest
     outputs:
-      Date: ${{ steps.date.outputs.date }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
     steps:
-      - name: Get current date
-        id: DATE
+      - name: Resolve release tag
+        id: resolve
+        shell: bash
         run: |
-          echo "Setting Date"
-          DATE="${{ github.event.release.tag_name }}"
-          if [ -z "$DATE" ]; then
-            DATE=$(date '+%Y%m%d-%H%M')
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${{ inputs.release_tag }}"
           fi
-          echo "DATE=$DATE" >> $GITHUB_OUTPUT
-          echo -e "\nWrote to file:\n$GITHUB_OUTPUT\n"
-          echo "Values:"
-          cat $GITHUB_OUTPUT
+
+          if [ -z "$TAG" ]; then
+            echo "No release tag was provided."
+            exit 1
+          fi
+
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using release tag: $TAG"
+
   Sharepoint:
     runs-on: ubuntu-latest
-    needs: [Date]
+    needs: [Context]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
@@ -33,35 +45,31 @@ jobs:
       - name: Determine runner mounts
         run: |
           sudo echo -e "Disk freespace and mounts\n$(df -hT)\n\n$(mount)" | tee runner-disks.txt
+
       - name: Download Artifacts
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(gh release list --repo ${{ github.repository }} --limit 1 --json tagName -q '.[0].tagName')
-            echo "No release tag in event context, using latest release: $TAG"
-          fi
-          echo "Downloading release assets for tag: $TAG"
+          mkdir -p release-assets
           gh release download "$TAG" \
-            --repo ${{ github.repository }} \
-            --dir . \
-            --clobber
+            --dir release-assets \
+            --pattern "${{ vars.COLLECTOR }}-*"
+
+      - name: Show downloaded files
+        run: ls -1sh release-assets | tee artifact-listing.txt
 
       - name: Validate Artifacts
+        shell: bash
+        working-directory: release-assets
         run: |
-          echo -e "Artifacts Downloaded\n$(find . -type f -iname *sha -execdir sha256sum -c {} \;)"
+          echo -e "Artifacts Downloaded\n$(find . -type f -iname '*sha' -execdir sha256sum -c {} \;)"
 
-      - name: Show Artifacts
-        run: ls -1sh | tee artifact-listing.txt
-
-      # Upload files to Sharepoint
-
+      # Upload files to SharePoint
       - name: Send Files to Sharepoint
         uses: amentumcms/sharepoint-file-upload-action@main
         with:
-          file_path: "${{ vars.COLLECTOR }}-*.*"
+          file_path: "release-assets/*"
           host_name: "${{ secrets.SHAREPOINT_HOST }}"
           site_name: "${{ secrets.SHAREPOINT_SITE }}"
-          upload_path: "${{ secrets.SHAREPOINT_BASEPATH }}/${{ vars.COLLECTOR }}/${{ needs.Date.outputs.Date }}"
+          upload_path: "${{ secrets.SHAREPOINT_BASEPATH }}/${{ vars.COLLECTOR }}/${{ needs.Context.outputs.release_tag }}"
           tenant_id: ${{ secrets.SHAREPOINT_TENANT_ID }}
           client_id: ${{ secrets.SHAREPOINT_APP_ID }}
           client_secret: ${{ secrets.SHAREPOINT_APP_SECRET }}
