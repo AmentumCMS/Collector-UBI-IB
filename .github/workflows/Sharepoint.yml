@@ -58,17 +58,15 @@ jobs:
           TAG: ${{ needs.Context.outputs.release_tag }}
         shell: bash
         run: |
-          mkdir -p release-assets
           gh release download "$TAG" \
-            --dir release-assets \
+            --dir . \
             --pattern "${{ vars.COLLECTOR }}-*"
 
       - name: Show downloaded files
-        run: ls -1sh release-assets | tee artifact-listing.txt
+        run: ls -1sh ${{ vars.COLLECTOR }}-* | tee artifact-listing.txt
 
       - name: Validate Artifacts
         shell: bash
-        working-directory: release-assets
         run: |
           echo -e "Artifacts Downloaded\n$(find . -type f -iname '*sha' -execdir sha256sum -c {} \;)"
 
@@ -76,7 +74,7 @@ jobs:
       - name: Send Files to Sharepoint
         uses: cringdahl/sharepoint-file-upload-action@v1.4.1
         with:
-          file_path: "release-assets/*"
+          file_path: "${{ vars.COLLECTOR }}-*"
           host_name: "${{ secrets.SHAREPOINT_HOST }}"
           site_name: "${{ secrets.SHAREPOINT_SITE }}"
           upload_path: "${{ secrets.SHAREPOINT_BASEPATH }}/${{ vars.COLLECTOR }}/${{ needs.Context.outputs.release_tag }}"
