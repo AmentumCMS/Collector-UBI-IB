@@ -1,8 +1,3 @@
-registry1.dso.mil:
-  images-by-tag-regex:
-    ironbank/redhat/ubi/ubi8-micro: ^8.10$
-    ironbank/redhat/ubi/ubi8-minimal: ^8.10$
-    ironbank/redhat/ubi/ubi8: ^8.10$
 registry.access.redhat.com:
   images-by-tag-regex:
     ubi9/ubi-micro: ^9.9$
